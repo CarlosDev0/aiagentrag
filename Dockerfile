@@ -43,10 +43,10 @@ COPY . .
 # -------------------------------
 # 7. Expose port
 # -------------------------------
-EXPOSE 8000
+EXPOSE 8080
 
 # -------------------------------
 # 8. Define entrypoint
 # -------------------------------
 # Run FastAPI app with uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
