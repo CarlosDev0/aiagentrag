@@ -1,4 +1,4 @@
-from langchain import LLMChain, PromptTemplate
+#from langchain import LLMChain, PromptTemplate
 
 #from langchain_openai import OpenAI
 #from langchain_openai import ChatOpenAI
@@ -7,7 +7,7 @@ from langchain import LLMChain, PromptTemplate
 from langchain_huggingface import HuggingFacePipeline
 from transformers import pipeline
 
-from sentence_transformers import SentenceTransformer
+#from sentence_transformers import SentenceTransformer
 import chromadb
 from chromadb.utils import embedding_functions
 from pypdf import PdfReader
@@ -15,7 +15,11 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from typing import List, Dict
+import threading
 import os
+
+llm_pipeline = None
+llm_lock = threading.Lock()
 
 load_dotenv()  # reads .env file
 #api_key = os.getenv("OPENAI_API_KEY")
@@ -47,6 +51,8 @@ COLLECTION_NAME = "document_collection"
 model_name = "sentence-transformers/all-MiniLM-L6-v2"
 embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
 
+# --- 2. Helper Functions ---
+
 def get_or_create_collection():
     """Get or create the collection safely"""
     try:
@@ -66,7 +72,7 @@ def get_or_create_collection():
         return collection
 
 # Initialize collection at startup
-collection = get_or_create_collection()
+#collection = get_or_create_collection()
 
 
 
@@ -85,7 +91,7 @@ collection = get_or_create_collection()
 
 #pypdf: Una librería para leer archivos PDF.
 
-# --- 2. Helper Functions ---
+
 
 def read_pdf(file: UploadFile) -> str:
     """Lee el texto de un archivo PDF."""
@@ -125,13 +131,21 @@ def reset_collection():
     print(f"Collection '{COLLECTION_NAME}' recreated")
     return collection
 
+def get_llm_pipeline():
+    global llm_pipeline
+    with llm_lock:
+        if llm_pipeline is None:
+            llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-base")
+    return llm_pipeline
+
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-large") #bigger model
-hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-small") #smaller model
+#hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-small") #smaller model
+#hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-base")
+                       
+#llm = HuggingFacePipeline(pipeline=hf_pipeline)
 
-llm = HuggingFacePipeline(pipeline=hf_pipeline)
-
-template = PromptTemplate(template="Question: {question}\nAnswer:", input_variables=["question"])
-chain = LLMChain(llm=llm, prompt=template)
+#template = PromptTemplate(template="Question: {question}\nAnswer:", input_variables=["question"])
+#chain = LLMChain(llm=llm, prompt=template)
 
 class QueryRequest(BaseModel):
     query: str
@@ -292,6 +306,8 @@ async def ask(req: QueryRequest):
         prompt = f"I am a full stack software engineer (since December 2018) with a portafolio website showcasing my skills. Your goal as a chatbot embedded in such website is to answer questions of recruiters. Please answer the following question in a concise, clear and professional way, using the details below from my curriculum:\n\nContext: {context}\n\nQuestion: {req.query}\nAnswer:"
 
         #2.3 Run the LLM
+        hf_pipeline = get_llm_pipeline()
+        llm = HuggingFacePipeline(pipeline=hf_pipeline)
         answer = llm.invoke(prompt)
         return {"answer": answer}
     except Exception as e:
