@@ -1,0 +1,78 @@
+pycache/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+*.log
+
+Virtual environment
+
+.venv/
+env/
+venv/
+
+ChromaDB persistence
+
+chroma/
+chroma_db/
+chroma_index/
+*.sqlite3
+
+Environment variables
+
+.env
+.env.*
+
+Byte-compiled / cache
+
+*.cache
+*.pytest_cache/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+Jupyter notebooks checkpoints
+
+.ipynb_checkpoints
+
+VS Code / IDEs
+
+.vscode/
+.idea/
+*.iml
+
+OS files
+
+.DS_Store
+Thumbs.db
+
+Docker
+
+*.pid
+*.tar
+*.bak
+*.swp
+docker-compose.override.yml
+
+Build / distribution
+
+build/
+dist/
+*.manifest
+*.spec
+
+Netlify / Vercel / Render deploy artifacts
+
+.netlify/
+.vercel/
+.render/
+
+Uvicorn / Gunicorn logs
+
+*.log
+*.pid
+*.db
