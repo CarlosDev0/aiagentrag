@@ -1,4 +1,5 @@
 numpy<2.0
+chromadb==0.4.22
 fastapi
 uvicorn[standard]
 gunicorn
@@ -14,4 +15,3 @@ python-dotenv
 pypdf
 pydantic
 python-multipart
-chromadb==0.4.22
