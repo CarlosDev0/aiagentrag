@@ -13,10 +13,11 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from typing import List, Dict
 import threading
+import asyncio
 import os
 
 llm_pipeline = None
-llm_lock = threading.Lock()
+llm_lock = asyncio.Lock()
 
 load_dotenv()  # reads .env file
 QDRANT_URL = os.getenv("QDRANT_URL")
@@ -63,25 +64,30 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(mo
 def get_or_create_collection():
     """Get or create the collection safely"""
     try:
-        collection = client.get_collection(
+        if client.collection_exists(collection_name=COLLECTION_NAME):
+            print(f"Collection '{COLLECTION_NAME}' already exists!!")
+            collection = client.get_collection(
             collection_name=COLLECTION_NAME
-        )
-        print(f"Collection '{COLLECTION_NAME}' found with {collection.count()} documents")
-        return collection
-    except Exception as e:
-        print(f"Collection not found, creating new one: {e}")
-        client.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(
+            )
+            return collection
+        else: 
+            print(f"Collection not found, creating new one: {e}")
+            client.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(
                 size=384,  # embedding dimension for all-MiniLM-L6-v2
                 distance=Distance.COSINE
+                )
+            )   
+            collection = client.get_collection(
+                collection_name=COLLECTION_NAME
             )
-        )
-        collection = client.get_collection(
-            collection_name=COLLECTION_NAME
-        )
-        print(f"Collection '{COLLECTION_NAME}' created")
-        return collection
+            print(f"Collection '{COLLECTION_NAME}' created")
+            return collection
+        
+    except Exception as e:
+        print(f"Error during collection setup: {e}")
+        return False
 
 # Initialize collection at startup
 #collection = get_or_create_collection()
@@ -133,27 +139,26 @@ def reset_collection():
     try:
         print(f"Collection to delete: '{COLLECTION_NAME}' ")
         #client.delete_collection(name=COLLECTION_NAME)
-        client.delete_collection(collection_name=COLLECTION_NAME)
-        print(f"Collection '{COLLECTION_NAME}' deleted")
+        if client.collection_exists(collection_name=COLLECTION_NAME):
+            client.delete_collection(collection_name=COLLECTION_NAME)
+            print(f"Collection '{COLLECTION_NAME}' deleted")
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE) 
+        )
+        collection = client.get_collection(collection_name=COLLECTION_NAME)
+        print(f"Collection '{COLLECTION_NAME}' recreated")
+        return collection
     except Exception as e:
         print(f"Error deleting collection: {e}")
-    # collection = client.create_collection(
-    #     name=COLLECTION_NAME,
-    #     embedding_function=embedding_function
-    # )
-    client.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=384, distance=Distance.COSINE) 
-    )
-    collection = client.get_collection(collection_name=COLLECTION_NAME)
-    print(f"Collection '{COLLECTION_NAME}' recreated")
-    return collection
+        return False
+    
 
-def get_llm_pipeline():
+async def get_llm_pipeline():
     global llm_pipeline
-    with llm_lock:
+    async with llm_lock:
         if llm_pipeline is None:
-            llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-base")
+            llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-small")
     return llm_pipeline
 
 def query_collection(query_text: str, top_k: int = 5):
@@ -164,6 +169,16 @@ def query_collection(query_text: str, top_k: int = 5):
         limit=top_k
     )
     return results
+
+def get_collection_count():
+    try:
+        count_response = client.count(collection_name=COLLECTION_NAME)
+        count = count_response.count
+        return count
+    except Exception as e:
+        print(f"Error getting collection count: {e}")
+        return 0
+
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-large") #bigger model
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-small") #smaller model
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-base")
@@ -199,7 +214,7 @@ async def train_with_document(file: UploadFile = File(...)):
     
     try:
         # Reset collection for new training
-        collection = reset_collection()
+        reset_collection()
         # 1. Read PDF
         document_text = read_pdf(file)
         if not document_text:
@@ -240,7 +255,7 @@ async def train_with_document(file: UploadFile = File(...)):
             collection_name=COLLECTION_NAME,
             points=points
         )
-        count = collection.count()
+        count = get_collection_count()
         print(f"Collection now has {count} documents")
 
         return {
@@ -346,7 +361,7 @@ async def ask(req: QueryRequest):
         prompt = f"I am a full stack software engineer (since December 2018) with a portafolio website showcasing my skills. Your goal as a chatbot embedded in such website is to answer questions of recruiters. Please answer the following question in a concise, clear and professional way, using the details below from my curriculum:\n\nContext: {context}\n\nQuestion: {req.query}\nAnswer:"
 
         #2.3 Run the LLM
-        hf_pipeline = get_llm_pipeline()
+        hf_pipeline = await get_llm_pipeline()
         llm = HuggingFacePipeline(pipeline=hf_pipeline)
         answer = llm.invoke(prompt)
         return {"answer": answer}
@@ -380,11 +395,12 @@ async def startup_event():
     """Initialize application on startup"""
     global collection
     try:
+        print("Application started ***")
         collection = get_or_create_collection()
-        print(f"Application started successfully. Collection has {collection.count()} documents.")
+        print(f"Application started successfully.")
     except Exception as e:
         print(f"Startup error: {e}")
 #http://127.0.0.1:8000/docs#
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
