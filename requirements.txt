@@ -13,4 +13,4 @@ python-dotenv
 pypdf
 pydantic
 python-multipart
-chromadb
+chromadb==0.4.22
