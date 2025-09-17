@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
-chromadb
+qdrant-client
 langchain
 langchain-community
 langchain-openai

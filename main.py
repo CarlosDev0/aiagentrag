@@ -1,14 +1,11 @@
-#from langchain import LLMChain, PromptTemplate
-
-#from langchain_openai import OpenAI
-#from langchain_openai import ChatOpenAI
-#0 free tier quota left in OPENAI. So I'm going to use huggingface
-
 from langchain_huggingface import HuggingFacePipeline
 from transformers import pipeline
 
 #from sentence_transformers import SentenceTransformer
-import chromadb
+#import chromadb
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+from qdrant_client.http import models
 from chromadb.utils import embedding_functions
 from pypdf import PdfReader
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -22,6 +19,9 @@ llm_pipeline = None
 llm_lock = threading.Lock()
 
 load_dotenv()  # reads .env file
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+
 #api_key = os.getenv("OPENAI_API_KEY")
 
 #if not api_key:
@@ -38,10 +38,17 @@ app = FastAPI()
 
 # SOLUTION 1: Use persistent storage instead of in-memory
 # This will create a local directory to store the database
-# pending work here: 
-PERSIST_DIRECTORY = "chroma_db"
-client = chromadb.PersistentClient(path=PERSIST_DIRECTORY)
 
+# PERSIST_DIRECTORY = "chroma_db"
+# client = chromadb.PersistentClient(path=PERSIST_DIRECTORY)
+
+# Initialize Qdrant client
+print (f"URL: {QDRANT_URL}")
+print (f"KEY: {QDRANT_API_KEY}")
+client = QdrantClient(
+    url=QDRANT_URL,
+    api_key=QDRANT_API_KEY
+)
 
 # Crea una colección para nuestras incrustaciones.
 # Usamos un modelo de Hugging Face para generar las incrustaciones.
@@ -57,16 +64,21 @@ def get_or_create_collection():
     """Get or create the collection safely"""
     try:
         collection = client.get_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_function
+            collection_name=COLLECTION_NAME
         )
         print(f"Collection '{COLLECTION_NAME}' found with {collection.count()} documents")
         return collection
     except Exception as e:
         print(f"Collection not found, creating new one: {e}")
-        collection = client.create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_function
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=384,  # embedding dimension for all-MiniLM-L6-v2
+                distance=Distance.COSINE
+            )
+        )
+        collection = client.get_collection(
+            collection_name=COLLECTION_NAME
         )
         print(f"Collection '{COLLECTION_NAME}' created")
         return collection
@@ -119,15 +131,21 @@ def reset_collection():
     """Reset the collection safely"""
     global collection
     try:
-        client.delete_collection(name=COLLECTION_NAME)
+        print(f"Collection to delete: '{COLLECTION_NAME}' ")
+        #client.delete_collection(name=COLLECTION_NAME)
+        client.delete_collection(collection_name=COLLECTION_NAME)
         print(f"Collection '{COLLECTION_NAME}' deleted")
     except Exception as e:
         print(f"Error deleting collection: {e}")
-    
-    collection = client.create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=embedding_function
+    # collection = client.create_collection(
+    #     name=COLLECTION_NAME,
+    #     embedding_function=embedding_function
+    # )
+    client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(size=384, distance=Distance.COSINE) 
     )
+    collection = client.get_collection(collection_name=COLLECTION_NAME)
     print(f"Collection '{COLLECTION_NAME}' recreated")
     return collection
 
@@ -138,6 +156,14 @@ def get_llm_pipeline():
             llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-base")
     return llm_pipeline
 
+def query_collection(query_text: str, top_k: int = 5):
+    query_vector = embedding_function(query_text)
+    results = client.search(
+        collection_name=COLLECTION_NAME,
+        query_vector=query_vector,
+        limit=top_k
+    )
+    return results
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-large") #bigger model
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-small") #smaller model
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-base")
@@ -190,16 +216,29 @@ async def train_with_document(file: UploadFile = File(...)):
                 detail="No text chunks generated from PDF."
             )
         # 3. Prepare data for ChromaDB
-        documents = chunks
-        metadatas = [{"source": file.filename} for _ in chunks]
-        ids = [f"id{i}" for i in range(len(chunks))]
+        #documents = chunks
+        #metadatas = [{"source": file.filename} for _ in chunks]
+        #ids = [f"id{i}" for i in range(len(chunks))]
 
         # 4. Add embeddings to database in batches (to avoid memory issues)
         # missing work here:
-        collection.add(
-            documents=documents,
-            metadatas=metadatas,
-            ids=ids
+        # collection.add(
+        #     documents=documents,
+        #     metadatas=metadatas,
+        #     ids=ids
+        # )
+        embeddings = [embedding_function(x) for x in chunks]
+        points = [
+            models.PointStruct(
+                id=i,
+                vector=embeddings[i],
+                payload={"text": chunks[i], "source": file.filename}
+            )
+            for i in range(len(chunks))
+        ]
+        client.upsert(
+            collection_name=COLLECTION_NAME,
+            points=points
         )
         count = collection.count()
         print(f"Collection now has {count} documents")
@@ -295,10 +334,11 @@ async def ask(req: QueryRequest):
         
         #Option2: 
         #2.1 Retrieve relevant chunks
-        results = collection.query(
-        query_texts=[req.query],
-        n_results=5
-        )
+        #results = collection.query(
+        #query_texts=[req.query],
+        #n_results=5
+        #)
+        results = query_collection(req.query,5)
         documents = results['documents'][0]
         
         #2.2 Create a prompt with the retrieved context
@@ -322,7 +362,7 @@ def get_status():
             "status": "active",
             "collection_name": COLLECTION_NAME,
             "documents_count": count,
-            "persist_directory": PERSIST_DIRECTORY
+            "persist_directory": "cloud.qdrant"
         }
     except Exception as e:
         return {
