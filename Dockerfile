@@ -1,7 +1,7 @@
 # -------------------------------
 # 1. Base Image
 # -------------------------------
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # -------------------------------
 # 2. Set environment variables
