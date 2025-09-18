@@ -20,7 +20,8 @@ Write-Host "Activating virtual environment..."
 # Upgrade pip and install dependencies
 Write-Host "Installing dependencies..."
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+#pip install -r requirements.txt
+pip install --prefer-binary -r requirements.txt
 
 # Run FastAPI app
 Write-Host "Virtual environment is ready. You are now inside .venv."

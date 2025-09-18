@@ -1,10 +1,10 @@
-from langchain_huggingface import HuggingFacePipeline
+from langchain.llms import HuggingFacePipeline
 from transformers import pipeline
 
 #from sentence_transformers import SentenceTransformer
 #import chromadb
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, VectorParams, PointStruct
 from qdrant_client.http import models
 from chromadb.utils import embedding_functions
 from pypdf import PdfReader
@@ -16,12 +16,12 @@ import threading
 import asyncio
 import os
 
-llm_pipeline = None
-llm_lock = asyncio.Lock()
+
 
 load_dotenv()  # reads .env file
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+COLLECTION_NAME = "document_collection"
 
 #api_key = os.getenv("OPENAI_API_KEY")
 
@@ -33,7 +33,7 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 # --- 1. Application Initialization ---
 
-app = FastAPI()
+app = FastAPI(title="RAG Application", version="1.0.0")
 # Inicializa ChromaDB en modo de cliente (en memoria por defecto)
 # ¡Nota!: Los datos se perderán cada vez que reinicies la aplicación.
 
@@ -42,6 +42,12 @@ app = FastAPI()
 
 # PERSIST_DIRECTORY = "chroma_db"
 # client = chromadb.PersistentClient(path=PERSIST_DIRECTORY)
+
+# Global variables
+client = None
+embedding_model = None
+llm_pipeline = None
+llm_lock = asyncio.Lock()
 
 # Initialize Qdrant client
 print (f"URL: {QDRANT_URL}")
@@ -55,15 +61,41 @@ client = QdrantClient(
 # Usamos un modelo de Hugging Face para generar las incrustaciones.
 # 'all-MiniLM-L6-v2' es un modelo pequeño y muy eficiente.
 
-COLLECTION_NAME = "document_collection"
+
 model_name = "sentence-transformers/all-MiniLM-L6-v2"
 embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
 
 # --- 2. Helper Functions ---
+def initialize_qdrant_client():
+    """Initialize Qdrant client safely"""
+    global client
+    try:
+        if not QDRANT_URL or not QDRANT_API_KEY:
+            raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in environment variables")
+        
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        print(f"Qdrant client initialized successfully")
+        return True
+    except Exception as e:
+        print(f"Failed to initialize Qdrant client: {e}")
+        return False
+
+def initialize_embedding_model():
+    """Initialize embedding model safely"""
+    global embedding_model
+    try:
+        embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        print("Embedding model initialized successfully")
+        return True
+    except Exception as e:
+        print(f"Failed to initialize embedding model: {e}")
+        return False
 
 def get_or_create_collection():
     """Get or create the collection safely"""
     try:
+        if not client:
+            raise ValueError("Qdrant client not initialized")
         if client.collection_exists(collection_name=COLLECTION_NAME):
             print(f"Collection '{COLLECTION_NAME}' already exists!!")
             collection = client.get_collection(
@@ -114,22 +146,34 @@ def get_or_create_collection():
 def read_pdf(file: UploadFile) -> str:
     """Lee el texto de un archivo PDF."""
     try:
+        file.file.seek(0)  # Reset file pointer
         reader = PdfReader(file.file)
         text = ""
-        for page in reader.pages:
-            text += page.extract_text() or "[No text on page]"
-        return text
+        for page_num, page in enumerate(reader.pages):
+            try:
+                page_text = page.extract_text()
+                if page_text:
+                    text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+            except Exception as e:
+                print(f"Error extracting text from page {page_num + 1}: {e}")
+                continue
+        return text.strip()
     except Exception as e:
-        print(f"Error al leer el PDF: {e}")
+        print(f"Error reading PDF: {e}")
         return ""
 
 def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
     """Divide un texto largo en fragmentos más pequeños con solapamiento."""
+    if not text or not text.strip():
+        return []
     chunks = []
     start = 0
+    text = text.strip()
     while start < len(text):
         end = start + chunk_size
-        chunks.append(text[start:end])
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
         start += chunk_size - overlap
     return chunks
 
@@ -210,7 +254,11 @@ async def train_with_document(file: UploadFile = File(...)):
             status_code=400,
             detail="El archivo debe ser un PDF."
         )
-
+    if not client:
+        raise HTTPException(status_code=500, detail="Qdrant client not initialized")
+    
+    if not embedding_model:
+        raise HTTPException(status_code=500, detail="Embedding model not initialized")
     
     try:
         # Reset collection for new training
@@ -242,19 +290,24 @@ async def train_with_document(file: UploadFile = File(...)):
         #     metadatas=metadatas,
         #     ids=ids
         # )
-        embeddings = [embedding_function(x) for x in chunks]
-        points = [
-            models.PointStruct(
-                id=i,
-                vector=embeddings[i],
-                payload={"text": chunks[i], "source": file.filename}
-            )
-            for i in range(len(chunks))
-        ]
-        client.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points
-        )
+        # Create embeddings and upsert
+        points = []
+        for i, chunk in enumerate(chunks):
+            try:
+                embedding = embedding_model.encode(chunk).tolist()
+                point = PointStruct(
+                    id=i,
+                    vector=embedding,
+                    payload={"text": chunk, "source": file.filename}
+                )
+                points.append(point)
+            except Exception as e:
+                print(f"Error processing chunk {i}: {e}")
+                continue
+        
+        if points:
+            client.upsert(collection_name=COLLECTION_NAME, points=points)
+        
         count = get_collection_count()
         print(f"Collection now has {count} documents")
 
@@ -339,10 +392,12 @@ async def search_in_document(query: Dict[str, str]):
         )
 @app.post("/ask")
 async def ask(req: QueryRequest):
-    
-    
+    """Ask question with RAG"""
     
     try:
+        if not client or not embedding_model:
+            raise HTTPException(status_code=500, detail="Services not initialized")
+        
         #Option1:Retrieve relevant chunks
         #answer = chain.run(question=req.query)  #Works fine. Retrieve chuncks
         #return {"answer": answer}
@@ -353,17 +408,31 @@ async def ask(req: QueryRequest):
         #query_texts=[req.query],
         #n_results=5
         #)
-        results = query_collection(req.query,5)
-        documents = results['documents'][0]
+        # Get relevant documents
+        query_embedding = embedding_model.encode(req.query).tolist()
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_embedding,
+            limit=3
+        )
         
-        #2.2 Create a prompt with the retrieved context
-        context = " ".join(documents)
-        prompt = f"I am a full stack software engineer (since December 2018) with a portafolio website showcasing my skills. Your goal as a chatbot embedded in such website is to answer questions of recruiters. Please answer the following question in a concise, clear and professional way, using the details below from my curriculum:\n\nContext: {context}\n\nQuestion: {req.query}\nAnswer:"
+        if not results:
+            return {"answer": "No relevant documents found. Please train the system first."}
+        
+        # Create context
+        context = " ".join([result.payload["text"] for result in results])
+        prompt = f"""Based on the following context, answer the question concisely and professionally:
 
-        #2.3 Run the LLM
+        Context: {context}
+
+        Question: {req.query}
+        Answer:"""
+        
+        # Get LLM response
         hf_pipeline = await get_llm_pipeline()
         llm = HuggingFacePipeline(pipeline=hf_pipeline)
         answer = llm.invoke(prompt)
+        
         return {"answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -371,19 +440,15 @@ async def ask(req: QueryRequest):
 @app.get("/status")
 def get_status():
     """Get database status"""
-    try:
-        count = collection.count() if collection else 0
-        return {
-            "status": "active",
-            "collection_name": COLLECTION_NAME,
-            "documents_count": count,
-            "persist_directory": "cloud.qdrant"
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "qdrant_connected": client is not None,
+        "embedding_model_loaded": embedding_model is not None,
+        "collection_exists": client.collection_exists(COLLECTION_NAME) if client else False,
+        "document_count": get_collection_count()
+    }
+
 @app.get("/")
 def read_root():
     return {"msg": "RAG Application Active", "status": "OK"}
@@ -392,15 +457,22 @@ def read_root():
 # on_event is deprecated in FASTAPI
 @app.on_event("startup")
 async def startup_event():
-    """Initialize application on startup"""
-    global collection
-    try:
-        print("Application started ***")
-        collection = get_or_create_collection()
-        print(f"Application started successfully.")
-    except Exception as e:
-        print(f"Startup error: {e}")
-#http://127.0.0.1:8000/docs#
+    """Initialize all services on startup"""
+    print("Starting RAG application...")
+    
+    # Initialize services
+    if not initialize_qdrant_client():
+        print("WARNING: Qdrant client initialization failed")
+    
+    if not initialize_embedding_model():
+        print("WARNING: Embedding model initialization failed")
+    
+    # Create collection if needed
+    if client:
+        get_or_create_collection()
+    
+    print("RAG application startup completed")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
