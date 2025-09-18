@@ -1,3 +1,6 @@
+pip>=23.2
+setuptools>=65
+wheel
 numpy<2.0
 chromadb==0.4.22
 fastapi
