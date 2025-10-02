@@ -195,11 +195,11 @@ def summarize_chunks(question, chunks, max_chunk_tokens=800):
             truncation=True,
             return_tensors="pt"
         )
-        context = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
+        text = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
 
-        prompt = f"Answer this question based on the context.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
+        #prompt = f"Answer this question based on the context.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
 
-        summary = summarizer(prompt, max_length=200, min_length=50, do_sample=False)
+        summary = summarizer(text, max_length=200, min_length=50, do_sample=False)
         return summary[0]['summary_text']
     except Exception as e:
         raise ValueError(f"Error in: summarize_chunks: {str(e)}")
@@ -804,7 +804,7 @@ async def ask(req: QueryRequest):
         # 3. Summarize results
         answer = summarize_chunks(req.query, relevant_chunks)
 
-        return {"answer": answer, "context": relevant_chunks}
+        return {"answer": answer}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ask failed: {str(e)}")
