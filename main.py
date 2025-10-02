@@ -1,6 +1,6 @@
 # from langchain.llms import HuggingFacePipeline
-# from transformers import pipeline
-
+from transformers import pipeline, AutoTokenizer
+import re
 #from sentence_transformers import SentenceTransformer
 #import chromadb
 
@@ -75,6 +75,8 @@ embedding_model = None
 llm_pipeline = None
 llm_lock = asyncio.Lock()
 HGClient = InferenceClient(api_key=HUGGING_FACE_TOKEN)
+summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+tokenizer = AutoTokenizer.from_pretrained("sshleifer/distilbart-cnn-12-6")
 #QDRANT: Is an online vector database
 
 # Initialize Qdrant client
@@ -147,6 +149,60 @@ def get_hf_embedding(text: str):
     #     return data
     # else:
     #     raise Exception(f"Unexpected HF response format: {data}")
+
+def split_question(question: str):
+    # lowercase, remove punctuation
+    question = re.sub(r'[^\w\s]', '', question.lower())
+    # split words
+    words = question.split()
+    # remove trivial words
+    stopwords = {"the","is","do","have","with","a","an","of","to"}
+    return [w for w in words if w not in stopwords]
+
+def retrieve_relevant_chunks(question: str, top_k=5):
+    words = split_question(question)
+    results = []
+
+    for w in words:
+        embedding = get_hf_embedding(w)
+        hits = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=embedding,
+            limit=top_k
+        )
+        results.extend(hits)
+
+    # remove duplicates & rank by score
+    unique = {}
+    for hit in results:
+        text = hit.payload["text"]
+        score = hit.score
+        if text not in unique or score > unique[text]:
+            unique[text] = score
+    
+    # sort by best score
+    sorted_hits = sorted(unique.items(), key=lambda x: x[1], reverse=True)
+    return [text for text, score in sorted_hits[:top_k]]
+
+def summarize_chunks(question, chunks, max_chunk_tokens=800):
+    try:
+        context = " ".join(chunks)
+        # Truncate context if it is too long for the model
+        # Tokenize and truncate properly
+        inputs = tokenizer(
+            context,
+            max_length=max_chunk_tokens,
+            truncation=True,
+            return_tensors="pt"
+        )
+        context = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
+
+        prompt = f"Answer this question based on the context.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
+
+        summary = summarizer(prompt, max_length=200, min_length=50, do_sample=False)
+        return summary[0]['summary_text']
+    except Exception as e:
+        raise ValueError(f"Error in: summarize_chunks: {str(e)}")
 
 # def initialize_embedding_model():
 #     """Initialize embedding model safely"""
@@ -498,7 +554,7 @@ async def extract(req: QueryRequest):
         context = " ".join([hit.payload["text"] for hit in results])
 
         # 4. Build prompt
-        prompt = f"""Based on the following context, answer the question concisely and professionally.
+        prompt = f"""Based on the following context, provide a long and professional answer to the question.
 
         Context: {context}
 
@@ -606,7 +662,7 @@ async def summarize(req: QueryRequest):
         context = " ".join([hit.payload["text"] for hit in results])
 
         # 4. Build prompt
-        prompt = f"""Summarize the answer to the question: '{req.query}' In the context you find the details of the work experience (jobs functions), answer the question professionally.
+        prompt = f"""Summarize the answer to the question: '{req.query}' In the context you find the details of the work experience (jobs functions), provide a long answer to the question professionally.
 
         Context: {context}
 
@@ -647,10 +703,10 @@ async def summarize(req: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"summarize failed: {str(e)}")
 
-@app.post("/ask")
+@app.post("/textgeneration")
 async def ask(req: QueryRequest):
     """Ask question with RAG"""
-    
+    """Local Model"""
     try:
         if not client:
             raise HTTPException(status_code=500, detail="Qdrant client not initialized")
@@ -673,58 +729,86 @@ async def ask(req: QueryRequest):
         context = " ".join([hit.payload["text"] for hit in results])
 
         # 4. Build prompt
-        prompt = f"""Summarize the answer to the question: '{req.query}' In the context you find the details of the work experience (jobs functions), answer the question professionally.
+        pipe = pipeline("text2text-generation", model="google/flan-t5-base")
+        result = pipe("Answer professionally: '{req.query}' Context: ...", max_new_tokens=200)
+        return result[0]["generated_text"]
+        
+        # prompt = f"""Summarize the answer to the question: '{req.query}' In the context you find the details of the work experience (jobs functions), answer the question professionally.
 
-        Context: {context}
+        # Context: {context}
 
-        Question: {req.query}
-        Answer:"""
+        # Question: {req.query}
+        # Answer:"""
 
         # 5. Call Hugging Face LLM API for final answer (example: flan-t5-small)
         #successful
-        hf_generation_url = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"  #successful
+        # hf_generation_url = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"  #successful
 
-        response = requests.post(
-            hf_generation_url,
-            headers=HF_HEADERS,
-            json={
-                "inputs": prompt,
-                "parameters": {
-                "max_new_tokens": 400,
-                "temperature": 0.7,
-                "top_p": 0.9
-                }
-            },
-            timeout=120
-        )
-        print("HF status code:", response.status_code)
-        print("HF raw response:", response.text)
+        # response = requests.post(
+        #     hf_generation_url,
+        #     headers=HF_HEADERS,
+        #     json={
+        #         "inputs": prompt,
+        #         "parameters": {
+        #         "max_new_tokens": 400,
+        #         "temperature": 0.7,
+        #         "top_p": 0.9
+        #         }
+        #     },
+        #     timeout=120
+        # )
+        # print("HF status code:", response.status_code)
+        # print("HF raw response:", response.text)
         
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Ask failed: {response.text}")
-        data = response.json()
+        # if response.status_code != 200:
+        #     raise HTTPException(status_code=500, detail=f"Ask failed: {response.text}")
+        # data = response.json()
 
-        # Handle summarization vs generation
-        answer = None
-        if isinstance(data, list) and len(data) > 0:
-            # Most generation models return a list with {"generated_text": "..."}
-            answer = data[0].get("generated_text") or data[0].get("summary_text")
-        elif isinstance(data, dict):
-            # Sometimes errors or different structures come as dict
-            if "generated_text" in data:
-                answer = data["generated_text"]
-            elif "summary_text" in data:
-                answer = data["summary_text"]
-            elif "error" in data:
-                raise HTTPException(status_code=500, detail=f"HuggingFace API error: {data['error']}")
+        # # Handle summarization vs generation
+        # answer = None
+        # if isinstance(data, list) and len(data) > 0:
+        #     # Most generation models return a list with {"generated_text": "..."}
+        #     answer = data[0].get("generated_text") or data[0].get("summary_text")
+        # elif isinstance(data, dict):
+        #     # Sometimes errors or different structures come as dict
+        #     if "generated_text" in data:
+        #         answer = data["generated_text"]
+        #     elif "summary_text" in data:
+        #         answer = data["summary_text"]
+        #     elif "error" in data:
+        #         raise HTTPException(status_code=500, detail=f"HuggingFace API error: {data['error']}")
 
-        if not answer:
-            raise HTTPException(status_code=500, detail=f"Unexpected HF response: {data}")
+        # if not answer:
+        #     raise HTTPException(status_code=500, detail=f"Unexpected HF response: {data}")
 
-        return {"answer": answer.strip(), "context": context}
+        # return {"answer": answer.strip(), "context": context}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ask failed: {str(e)}")
-    
+
+@app.post("/ask")
+async def ask(req: QueryRequest):
+    """Ask question with RAG"""
+    """Local Model"""
+    try:
+        if not client:
+            raise HTTPException(status_code=500, detail="Qdrant client not initialized")
+        # 1. Split question
+        words = split_question(req.query)
+
+        # 2. Retrieve relevant chunks from Qdrant
+        relevant_chunks = retrieve_relevant_chunks(req.query, top_k=5)
+
+        if not relevant_chunks:
+            return {"answer": "No relevant documents found. Please train the system first."}
+
+        # 3. Summarize results
+        answer = summarize_chunks(req.query, relevant_chunks)
+
+        return {"answer": answer, "context": relevant_chunks}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ask failed: {str(e)}")
+
 @app.get("/status")
 def get_status():
     """Get database status"""

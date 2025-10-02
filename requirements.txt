@@ -14,13 +14,13 @@ qdrant-client==1.7.3
 # typing-extensions>=4.5.0
 
 # langchain==0.0.340
-# transformers==4.41.2
+transformers==4.41.2
 
 #langchain-community==0.0.1
 #langchain-huggingface==0.0.2
 
 
-# torch==2.7.1
+torch==2.7.1
 # sentence-transformers==3.0.1
 
 #langchain-openai
