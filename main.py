@@ -37,6 +37,7 @@ print("QDRANT_URL: " + QDRANT_URL)
 print("QDRANT_API_KEY:", "loaded" if QDRANT_API_KEY else "missing")
 print("HUGGING_FACE_TOKEN:", "loaded" if HUGGING_FACE_TOKEN else "missing")
 print("HF_API_URL: " + HF_API_URL)
+print("HEADERS: " + str(HF_HEADERS))
 
 #api_key = os.getenv("OPENAI_API_KEY")
 
@@ -109,8 +110,8 @@ def get_hf_embedding(text: str):
         raise ValueError("Input text chunk is empty or whitespace-only.")
     
     # FIX: The standard Feature Extraction payload requires the input text to be in a list.
-    payload = {"inputs": [text]}
-    #payload = {"sentences": [text]}
+    #payload = {"inputs": [text]}
+    payload = {"sentences": [text]}
 
     response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload)
     if response.status_code != 200:
