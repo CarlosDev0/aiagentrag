@@ -3,25 +3,40 @@
 
 #from sentence_transformers import SentenceTransformer
 #import chromadb
-# from qdrant_client import QdrantClient
+
 # from qdrant_client.models import Distance, VectorParams, PointStruct
 # from qdrant_client.http import models
 # from chromadb.utils import embedding_functions
-# from pypdf import PdfReader
+from pypdf import PdfReader
+from dotenv import load_dotenv
+from qdrant_client import QdrantClient
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
-# from dotenv import load_dotenv
+
 from typing import List, Dict
 import threading
 import asyncio
 import os
+import requests
 
 
-
-#load_dotenv()  # reads .env file
+load_dotenv()  # reads .env file
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "document_collection"
+HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
+#MODEL_ID = "sentence-transformers/paraphrase-MiniLM-L6-v2"  #"sentence-transformers/all-MiniLM-L6-v2"
+#MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+
+#MODEL_ID = "OpenAI text-embedding-ada-002"
+MODEL_ID = "sentence-transformers/all-mpnet-base-v2"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+HF_HEADERS = {"Authorization": f"Bearer {HUGGING_FACE_TOKEN}"}
+
+print("QDRANT_URL: " + QDRANT_URL)
+print("QDRANT_API_KEY:", "loaded" if QDRANT_API_KEY else "missing")
+print("HUGGING_FACE_TOKEN:", "loaded" if HUGGING_FACE_TOKEN else "missing")
+print("HF_API_URL: " + HF_API_URL)
 
 #api_key = os.getenv("OPENAI_API_KEY")
 
@@ -49,6 +64,8 @@ embedding_model = None
 llm_pipeline = None
 llm_lock = asyncio.Lock()
 
+#QDRANT: Is an online vector database
+
 # Initialize Qdrant client
 # print (f"URL: {QDRANT_URL}")
 # print (f"KEY: {QDRANT_API_KEY}")
@@ -66,19 +83,50 @@ llm_lock = asyncio.Lock()
 # embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
 
 # --- 2. Helper Functions ---
-# def initialize_qdrant_client():
-#     """Initialize Qdrant client safely"""
-#     global client
-#     try:
-#         if not QDRANT_URL or not QDRANT_API_KEY:
-#             raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in environment variables")
+def initialize_qdrant_client():
+    """Initialize Qdrant client safely"""
+    global client
+    try:
+        if not QDRANT_URL or not QDRANT_API_KEY:
+            raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in environment variables")
         
-#         client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-#         print(f"Qdrant client initialized successfully")
-#         return True
-#     except Exception as e:
-#         print(f"Failed to initialize Qdrant client: {e}")
-#         return False
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        print(f"Qdrant client initialized successfully")
+        return True
+    except Exception as e:
+        print(f"Failed to initialize Qdrant client: {e}")
+        return False
+
+# --- Call Hugging Face API:
+def get_hf_embedding(text: str):
+    """Call Hugging Face API to get embedding for one text chunk"""
+    max_len = 500  # keep under safe limit (tokens, approx chars)
+    if len(text) > max_len:
+        text = text[:max_len]
+    
+    if not text.strip():
+        # Raise an exception so the loop's try/except block skips this chunk.
+        raise ValueError("Input text chunk is empty or whitespace-only.")
+    
+    # FIX: The standard Feature Extraction payload requires the input text to be in a list.
+    payload = {"inputs": [text]}
+    #payload = {"sentences": [text]}
+
+    response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload)
+    if response.status_code != 200:
+        raise Exception(f"HF API error {response.status_code}: {response.text}")
+    #response.raise_for_status()
+    #return response.json()[0]  # returns a list of floats (vector size 384)
+    data = response.json()
+
+    # Some models return [[...]], some just [...]
+    if isinstance(data, list) and isinstance(data[0], list):
+        return data[0]  # take first embedding
+    elif isinstance(data, list) and all(isinstance(x, (int, float)) for x in data):
+        # Fallback in case a list of floats is returned directly, though less common
+        return data
+    else:
+        raise Exception(f"Unexpected HF response format: {data}")
 
 # def initialize_embedding_model():
 #     """Initialize embedding model safely"""
@@ -143,39 +191,39 @@ llm_lock = asyncio.Lock()
 
 
 
-# def read_pdf(file: UploadFile) -> str:
-#     """Lee el texto de un archivo PDF."""
-#     try:
-#         file.file.seek(0)  # Reset file pointer
-#         reader = PdfReader(file.file)
-#         text = ""
-#         for page_num, page in enumerate(reader.pages):
-#             try:
-#                 page_text = page.extract_text()
-#                 if page_text:
-#                     text += f"\n--- Page {page_num + 1} ---\n{page_text}"
-#             except Exception as e:
-#                 print(f"Error extracting text from page {page_num + 1}: {e}")
-#                 continue
-#         return text.strip()
-#     except Exception as e:
-#         print(f"Error reading PDF: {e}")
-#         return ""
+def read_pdf(file: UploadFile) -> str:
+    """Lee el texto de un archivo PDF."""
+    try:
+        file.file.seek(0)  # Reset file pointer
+        reader = PdfReader(file.file)
+        text = ""
+        for page_num, page in enumerate(reader.pages):
+            try:
+                page_text = page.extract_text()
+                if page_text:
+                    text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+            except Exception as e:
+                print(f"Error extracting text from page {page_num + 1}: {e}")
+                continue
+        return text.strip()
+    except Exception as e:
+        print(f"Error reading PDF: {e}")
+        return ""
 
-# def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-#     """Divide un texto largo en fragmentos más pequeños con solapamiento."""
-#     if not text or not text.strip():
-#         return []
-#     chunks = []
-#     start = 0
-#     text = text.strip()
-#     while start < len(text):
-#         end = start + chunk_size
-#         chunk = text[start:end].strip()
-#         if chunk:
-#             chunks.append(chunk)
-#         start += chunk_size - overlap
-#     return chunks
+def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
+    """Divide un texto largo en fragmentos más pequeños con solapamiento."""
+    if not text or not text.strip():
+        return []
+    chunks = []
+    start = 0
+    text = text.strip()
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start += chunk_size - overlap
+    return chunks
 
 # def reset_collection():
 #     """Reset the collection safely"""
@@ -214,14 +262,13 @@ llm_lock = asyncio.Lock()
 #     )
 #     return results
 
-# def get_collection_count():
-#     try:
-#         count_response = client.count(collection_name=COLLECTION_NAME)
-#         count = count_response.count
-#         return count
-#     except Exception as e:
-#         print(f"Error getting collection count: {e}")
-#         return 0
+def get_collection_count():
+    try:
+        count_response = client.count(collection_name=COLLECTION_NAME)
+        return count_response.count
+    except Exception as e:
+        print(f"Error getting collection count: {e}")
+        return 0
 
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-large") #bigger model
 #hf_pipeline = pipeline("text2text-generation", model="google/flan-t5-small") #smaller model
@@ -248,36 +295,40 @@ async def train_with_document(file: UploadFile = File(...)):
     - Convert chunks to vector embeddings
     - Save embeddings to vector database
     """
-    # global collection
-    # if file.content_type != "application/pdf":
-    #     raise HTTPException(
-    #         status_code=400,
-    #         detail="El archivo debe ser un PDF."
-    #     )
-    # if not client:
-    #     raise HTTPException(status_code=500, detail="Qdrant client not initialized")
+    global collection
+    if file.content_type != "application/pdf":
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo debe ser un PDF."
+        )
+    if not client:
+        raise HTTPException(status_code=500, detail="Qdrant client not initialized")
     
     # if not embedding_model:
     #     raise HTTPException(status_code=500, detail="Embedding model not initialized")
     
-    # try:
+    try:
     #     # Reset collection for new training
     #     reset_collection()
-    #     # 1. Read PDF
-    #     document_text = read_pdf(file)
-    #     if not document_text:
-    #         raise HTTPException(
-    #             status_code=400,
-    #             detail="Could not extract text from PDF."
-    #         )
+    # 1. Read PDF
+        document_text = read_pdf(file)
+        if not document_text:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract text from PDF."
+            )
 
     #     # 2. Split text into chunks
-    #     chunks = split_text_into_chunks(document_text)
-    #     if not chunks:
-    #         raise HTTPException(
-    #             status_code=400,
-    #             detail="No text chunks generated from PDF."
-    #         )
+        chunks = split_text_into_chunks(document_text)
+        if not chunks:
+            raise HTTPException(
+                status_code=400,
+                detail="No text chunks generated from PDF."
+            )
+    #   Foreach chunk Calls an external free-tier API(Hugging face)
+    #   To get the vector embedding.
+
+
         # 3. Prepare data for ChromaDB
         #documents = chunks
         #metadatas = [{"source": file.filename} for _ in chunks]
@@ -291,38 +342,38 @@ async def train_with_document(file: UploadFile = File(...)):
         #     ids=ids
         # )
         # Create embeddings and upsert
-        # points = []
-        # for i, chunk in enumerate(chunks):
-        #     try:
-        #         embedding = embedding_model.encode(chunk).tolist()
-        #         point = PointStruct(
-        #             id=i,
-        #             vector=embedding,
-        #             payload={"text": chunk, "source": file.filename}
-        #         )
-        #         points.append(point)
-        #     except Exception as e:
-        #         print(f"Error processing chunk {i}: {e}")
-        #         continue
+        points = []
+        for i, chunk in enumerate(chunks):
+            try:
+                embedding = get_hf_embedding(chunk)  # 👈 Hugging Face call
+                point = {
+                    "id": i,
+                    "vector": embedding,
+                    "payload": {"text": chunk, "source": file.filename}
+                }
+                points.append(point)
+            except Exception as e:
+                print(f"Error processing chunk {i}: {e}")
+                continue
         
-        # if points:
-        #     client.upsert(collection_name=COLLECTION_NAME, points=points)
+        if points:
+            client.upsert(collection_name=COLLECTION_NAME, points=points)
         
         # count = get_collection_count()
         # print(f"Collection now has {count} documents")
 
-    return {
-        "message": "Document processed and trained successfully.",
-        # "chunks_count": len(chunks),
-        # "total_documents_in_db": count
-    }
+        return {
+            "message": "Document processed and trained successfully.",
+            # "chunks_count": len(chunks),
+            # "total_documents_in_db": count
+        }
     
-    # except Exception as e:
-    #     print(f"Training error: {e}")
-    #     raise HTTPException(
-    #         status_code=500,
-    #         detail=f"Training failed: {str(e)}"
-    #     )
+    except Exception as e:
+        print(f"Training error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Training failed: {str(e)}"
+        )
 
 @app.post("/search")
 async def search_in_document(query: Dict[str, str]):
@@ -395,13 +446,48 @@ async def ask(req: QueryRequest):
     """Ask question with RAG"""
     
     try:
-        # if not client or not embedding_model:
-        #     raise HTTPException(status_code=500, detail="Services not initialized")
+        if not client:
+            raise HTTPException(status_code=500, detail="Qdrant client not initialized")
+        # 1. Get query embedding from Hugging Face API
+        query_embedding = get_hf_embedding(req.query)
         
         #Option1:Retrieve relevant chunks
         #answer = chain.run(question=req.query)  #Works fine. Retrieve chuncks
         #return {"answer": answer}
         
+        # 2. Search Qdrant for top-k relevant chunks
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_embedding,
+            limit=3
+        )
+
+        if not results:
+            return {"answer": "No relevant documents found. Please train the system first."}
+
+        # 3. Build context from retrieved chunks
+        context = " ".join([hit.payload["text"] for hit in results])
+
+        # 4. Build prompt
+        prompt = f"""Based on the following context, answer the question concisely and professionally.
+
+        Context: {context}
+
+        Question: {req.query}
+        Answer:"""
+
+        # 5. Call Hugging Face LLM API for final answer (example: flan-t5-small)
+        hf_generation_url = "https://api-inference.huggingface.co/models/google/flan-t5-small"
+        response = requests.post(
+            hf_generation_url,
+            headers=HF_HEADERS,
+            json={"inputs": prompt}
+        )
+        response.raise_for_status()
+        answer = response.json()[0]["generated_text"]
+
+        return {"answer": answer, "context": context}
+    
         #Option2: 
         #2.1 Retrieve relevant chunks
         #results = collection.query(
@@ -417,16 +503,16 @@ async def ask(req: QueryRequest):
         # )
         
         #if not results:
-        return {"answer": "No relevant documents found. Please train the system first."}
+        # return {"answer": "No relevant documents found. Please train the system first."}
         
-        # Create context
-        context = " ".join([result.payload["text"] for result in results])
-        prompt = f"""Based on the following context, answer the question concisely and professionally:
+        # # Create context
+        # context = " ".join([result.payload["text"] for result in results])
+        # prompt = f"""Based on the following context, answer the question concisely and professionally:
 
-        Context: {context}
+        # Context: {context}
 
-        Question: {req.query}
-        Answer:"""
+        # Question: {req.query}
+        # Answer:"""
         
         # Get LLM response
         # hf_pipeline = await get_llm_pipeline()
@@ -435,18 +521,28 @@ async def ask(req: QueryRequest):
         
         # return {"answer": answer}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Ask failed: {str(e)}")
 
 @app.get("/status")
 def get_status():
     """Get database status"""
     """Health check endpoint"""
+    collection_exists = False
+    doc_count =0
+    if(client):
+        try:
+            coll_info = client.get_Collection(COLLECTION_NAME)
+            collection_exists=True
+            doc_count = coll_info.vectors_count
+        except Exception as e:
+            collection_exists = False
+            doc_count =0
     return {
         "status": "healthy",
         "qdrant_connected": client is not None,
         "embedding_model_loaded": embedding_model is not None,
-        "collection_exists": client.collection_exists(COLLECTION_NAME) if client else False,
-        #"document_count": get_collection_count()
+        "collection_exists": collection_exists,
+        "document_count": doc_count
     }
 
 @app.get("/")
@@ -461,9 +557,9 @@ async def startup_event():
     print("Starting RAG application...")
     
     # Initialize services
-    # if not initialize_qdrant_client():
-    #     print("WARNING: Qdrant client initialization failed")
-    
+    if not initialize_qdrant_client():
+        print("WARNING: Qdrant client initialization failed")
+
     # if not initialize_embedding_model():
     #     print("WARNING: Embedding model initialization failed")
     
