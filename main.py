@@ -10,8 +10,10 @@
 from pypdf import PdfReader
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
+from huggingface_hub import InferenceClient
 
 from typing import List, Dict
 import threading
@@ -26,11 +28,19 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "document_collection"
 HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
 #MODEL_ID = "sentence-transformers/paraphrase-MiniLM-L6-v2"  #"sentence-transformers/all-MiniLM-L6-v2"
-#MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 
-#MODEL_ID = "OpenAI text-embedding-ada-002"
-MODEL_ID = "sentence-transformers/all-mpnet-base-v2"
+#MODEL_ID = "sentence-transformers/all-mpnet-base-v2"
+
+#MODEL_ID = "text-embedding-ada-002"  #NOT FOUND
+#MODEL_ID = "gpt2" #NOT FOUND
+#MODEL_ID = "dbmdz/bert-large-cased-finetuned-conll03-english"  #INPUT expected = numbers
+#MODEL_ID = "YaYaB/yb_test_inference_clip_embedding" #NOT FOUND
+#MODEL_ID = "deerslab/llama-7b-embeddings" #NOT FOUND
+#MODEL_ID = "BAAI/bge-large-en-v1.5"
 HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+#MODEL_ID = "sentence-transformers/all-mpnet-base-v2"
+#HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-mpnet-base-v2"
 HF_HEADERS = {"Authorization": f"Bearer {HUGGING_FACE_TOKEN}"}
 
 print("QDRANT_URL: " + QDRANT_URL)
@@ -64,7 +74,7 @@ client = None
 embedding_model = None
 llm_pipeline = None
 llm_lock = asyncio.Lock()
-
+HGClient = InferenceClient(api_key=HUGGING_FACE_TOKEN)
 #QDRANT: Is an online vector database
 
 # Initialize Qdrant client
@@ -92,6 +102,11 @@ def initialize_qdrant_client():
             raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in environment variables")
         
         client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        # client = QdrantClient(
+        #     url="https://b15776a3-3430-4d25-bd2e-d85f6ea4a3cc.us-east4-0.gcp.cloud.qdrant.io",
+        #     api_key="YOUR_API_KEY"
+        # )
+        print(client.get_collections())
         print(f"Qdrant client initialized successfully")
         return True
     except Exception as e:
@@ -110,24 +125,28 @@ def get_hf_embedding(text: str):
         raise ValueError("Input text chunk is empty or whitespace-only.")
     
     # FIX: The standard Feature Extraction payload requires the input text to be in a list.
-    #payload = {"inputs": [text]}
-    payload = {"sentences": [text]}
+    #payload = {"inputs": text}
+    #payload = {"sentences": [text]}
+    try:
+        result = HGClient.feature_extraction(text, model=MODEL_ID)
+        return result  # list of floats (vector)
+    except:
+        raise ValueError("Error in get_hf_embedding.")
+    # response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload)
+    # if response.status_code != 200:
+    #     raise Exception(f"HF API error {response.status_code}: {response.text}")
+    # #response.raise_for_status()
+    # #return response.json()[0]  # returns a list of floats (vector size 384)
+    # data = response.json()
 
-    response = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload)
-    if response.status_code != 200:
-        raise Exception(f"HF API error {response.status_code}: {response.text}")
-    #response.raise_for_status()
-    #return response.json()[0]  # returns a list of floats (vector size 384)
-    data = response.json()
-
-    # Some models return [[...]], some just [...]
-    if isinstance(data, list) and isinstance(data[0], list):
-        return data[0]  # take first embedding
-    elif isinstance(data, list) and all(isinstance(x, (int, float)) for x in data):
-        # Fallback in case a list of floats is returned directly, though less common
-        return data
-    else:
-        raise Exception(f"Unexpected HF response format: {data}")
+    # # Some models return [[...]], some just [...]
+    # if isinstance(data, list) and isinstance(data[0], list):
+    #     return data[0]  # take first embedding
+    # elif isinstance(data, list) and all(isinstance(x, (int, float)) for x in data):
+    #     # Fallback in case a list of floats is returned directly, though less common
+    #     return data
+    # else:
+    #     raise Exception(f"Unexpected HF response format: {data}")
 
 # def initialize_embedding_model():
 #     """Initialize embedding model safely"""
@@ -300,14 +319,11 @@ async def train_with_document(file: UploadFile = File(...)):
     if file.content_type != "application/pdf":
         raise HTTPException(
             status_code=400,
-            detail="El archivo debe ser un PDF."
+            detail="The file should have PDF format."
         )
     if not client:
         raise HTTPException(status_code=500, detail="Qdrant client not initialized")
-    
-    # if not embedding_model:
-    #     raise HTTPException(status_code=500, detail="Embedding model not initialized")
-    
+  
     try:
     #     # Reset collection for new training
     #     reset_collection()
@@ -326,6 +342,55 @@ async def train_with_document(file: UploadFile = File(...)):
                 status_code=400,
                 detail="No text chunks generated from PDF."
             )
+    
+        points = []
+        
+ 
+        for i, chunk in enumerate(chunks):
+            try:
+                embedding = get_hf_embedding(chunk)  # 👈 Hugging Face call
+                point = {
+                    "id": i,
+                    "vector": embedding,
+                    "payload": {"text": chunk, "source": file.filename}
+                }
+                points.append(point)
+            except Exception as e:
+                print(f"Error processing chunk {i}: {e}")
+                continue
+        
+        if points:
+            # Ensure collection exists
+            try:
+                collections = [c.name for c in client.get_collections().collections]
+                if COLLECTION_NAME not in collections:
+                    print(f"Creating new collection '{COLLECTION_NAME}'")
+                    client.create_collection(
+                        collection_name=COLLECTION_NAME,
+                        vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+                    )
+                else:
+                    print(f"Collection '{COLLECTION_NAME}' already exists")
+            except Exception:
+                print(f"Creating new collection '{COLLECTION_NAME}'")
+                client.create_collection(
+                    collection_name=COLLECTION_NAME,
+                    vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+                )
+            client.upsert(collection_name=COLLECTION_NAME, points=points)
+        
+        return {
+            "message": "Document processed and trained successfully.",
+             "chunks_count": len(chunks),
+            # "total_documents_in_db": count
+        }
+    
+    except Exception as e:
+        print(f"Training error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Training failed: {str(e)}"
+        )
     #   Foreach chunk Calls an external free-tier API(Hugging face)
     #   To get the vector embedding.
 
@@ -343,38 +408,6 @@ async def train_with_document(file: UploadFile = File(...)):
         #     ids=ids
         # )
         # Create embeddings and upsert
-        points = []
-        for i, chunk in enumerate(chunks):
-            try:
-                embedding = get_hf_embedding(chunk)  # 👈 Hugging Face call
-                point = {
-                    "id": i,
-                    "vector": embedding,
-                    "payload": {"text": chunk, "source": file.filename}
-                }
-                points.append(point)
-            except Exception as e:
-                print(f"Error processing chunk {i}: {e}")
-                continue
-        
-        if points:
-            client.upsert(collection_name=COLLECTION_NAME, points=points)
-        
-        # count = get_collection_count()
-        # print(f"Collection now has {count} documents")
-
-        return {
-            "message": "Document processed and trained successfully.",
-            # "chunks_count": len(chunks),
-            # "total_documents_in_db": count
-        }
-    
-    except Exception as e:
-        print(f"Training error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Training failed: {str(e)}"
-        )
 
 @app.post("/search")
 async def search_in_document(query: Dict[str, str]):
@@ -532,16 +565,16 @@ def get_status():
     doc_count =0
     if(client):
         try:
-            coll_info = client.get_Collection(COLLECTION_NAME)
+            count_response = client.count(collection_name=COLLECTION_NAME)
             collection_exists=True
-            doc_count = coll_info.vectors_count
+            doc_count = count_response.count
         except Exception as e:
+            print(f"Error in status: {e}")
             collection_exists = False
             doc_count =0
     return {
         "status": "healthy",
         "qdrant_connected": client is not None,
-        "embedding_model_loaded": embedding_model is not None,
         "collection_exists": collection_exists,
         "document_count": doc_count
     }

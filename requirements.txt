@@ -26,3 +26,4 @@ python-dotenv==1.0.0    #Useful if you’re loading .env files locally.
 python-multipart==0.0.6
 pypdf==3.17.1
 requests
+huggingface_hub
