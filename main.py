@@ -1,5 +1,5 @@
-#from langchain.llms import HuggingFacePipeline
-#from transformers import pipeline
+# from langchain.llms import HuggingFacePipeline
+# from transformers import pipeline
 
 #from sentence_transformers import SentenceTransformer
 #import chromadb
@@ -245,33 +245,28 @@ def split_text_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50) 
         start += chunk_size - overlap
     return chunks
 
-# def reset_collection():
-#     """Reset the collection safely"""
-#     global collection
-#     try:
-#         print(f"Collection to delete: '{COLLECTION_NAME}' ")
-#         #client.delete_collection(name=COLLECTION_NAME)
-#         if client.collection_exists(collection_name=COLLECTION_NAME):
-#             client.delete_collection(collection_name=COLLECTION_NAME)
-#             print(f"Collection '{COLLECTION_NAME}' deleted")
-#         client.create_collection(
-#             collection_name=COLLECTION_NAME,
-#             vectors_config=VectorParams(size=384, distance=Distance.COSINE) 
-#         )
-#         collection = client.get_collection(collection_name=COLLECTION_NAME)
-#         print(f"Collection '{COLLECTION_NAME}' recreated")
-#         return collection
-#     except Exception as e:
-#         print(f"Error deleting collection: {e}")
-#         return False
+def reset_collection():
+    """Reset the collection safely"""
+    global collection
+    try:
+        print(f"Collection to recreate: '{COLLECTION_NAME}' ")
+        client.recreate_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+        )
+        print(f"Collection '{COLLECTION_NAME}' recreated")
+        return True
+    except Exception as e:
+        print(f"Error deleting collection: {e}")
+        return False
     
 
-# async def get_llm_pipeline():
-#     global llm_pipeline
-#     async with llm_lock:
-#         if llm_pipeline is None:
-#             llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-small")
-#     return llm_pipeline
+async def get_llm_pipeline():
+    global llm_pipeline
+    async with llm_lock:
+        if llm_pipeline is None:
+            llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-small")
+    return llm_pipeline
 
 # def query_collection(query_text: str, top_k: int = 5):
 #     query_vector = embedding_function(query_text)
@@ -326,7 +321,7 @@ async def train_with_document(file: UploadFile = File(...)):
   
     try:
     #     # Reset collection for new training
-    #     reset_collection()
+        reset_collection()
     # 1. Read PDF
         document_text = read_pdf(file)
         if not document_text:
@@ -475,8 +470,8 @@ async def search_in_document(query: Dict[str, str]):
     #         status_code=500,
     #         detail=f"Search failed: {str(e)}"
     #     )
-@app.post("/ask")
-async def ask(req: QueryRequest):
+@app.post("/extract")
+async def extract(req: QueryRequest):
     """Ask question with RAG"""
     
     try:
@@ -511,16 +506,44 @@ async def ask(req: QueryRequest):
         Answer:"""
 
         # 5. Call Hugging Face LLM API for final answer (example: flan-t5-small)
-        hf_generation_url = "https://api-inference.huggingface.co/models/google/flan-t5-small"
+        #hf_generation_url = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+        #hf_generation_url = "https://api-inference.huggingface.co/models/sshleifer/tiny-gpt2"
+        #hf_generation_url = "https://api-inference.huggingface.co/models/google/flan-t5-small"
+        # hf_generation_url = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
+        
+        #successful
+        #hf_generation_url = "https://api-inference.huggingface.co/models/sshleifer/distilbart-cnn-12-6"  #successful
+        hf_generation_url = "https://api-inference.huggingface.co/models/deepset/roberta-base-squad2"  #successful
+
         response = requests.post(
             hf_generation_url,
             headers=HF_HEADERS,
-            json={"inputs": prompt}
+            json={"inputs": {"question": req.query, "context": context}},
+            timeout=120
         )
-        response.raise_for_status()
-        answer = response.json()[0]["generated_text"]
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Extract failed: {response.text}")
+        data = response.json()
 
-        return {"answer": answer, "context": context}
+        #For: deepset/roberta-base-squad2
+        answer = data.get("answer", "").strip()
+        score = data.get("score", 0.0)
+
+        # Handle summarization vs generation
+        # answer = None
+        # if isinstance(data, list):
+        #     if "generated_text" in data[0]:
+        #         answer = data[0]["generated_text"]
+        #     elif "summary_text" in data[0]:
+        #         answer = data[0]["summary_text"]
+        # elif isinstance(data, dict):
+        #     answer = data.get("generated_text") or data.get("summary_text")
+
+        # if not answer:
+        #     raise HTTPException(status_code=500, detail=f"Unexpected HF response: {data}")
+        if not answer:
+            return {"answer": "No confident answer found.", "context": context, "score": score}
+        return {"answer": answer.strip(), "context": context}
     
         #Option2: 
         #2.1 Retrieve relevant chunks
@@ -549,14 +572,159 @@ async def ask(req: QueryRequest):
         # Answer:"""
         
         # Get LLM response
-        # hf_pipeline = await get_llm_pipeline()
-        # llm = HuggingFacePipeline(pipeline=hf_pipeline)
-        # answer = llm.invoke(prompt)
+        hf_pipeline = await get_llm_pipeline()
+        llm = HuggingFacePipeline(pipeline=hf_pipeline)
+        answer = llm.invoke(prompt)
         
-        # return {"answer": answer}
+        return {"answer": answer}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extract failed: {str(e)}")
+
+@app.post("/summarize")
+async def summarize(req: QueryRequest):
+    """summarize question with RAG"""
+    
+    try:
+        if not client:
+            raise HTTPException(status_code=500, detail="Qdrant client not initialized")
+        # 1. Get query embedding from Hugging Face API
+        query_embedding = get_hf_embedding(req.query)
+        
+        #Option1:Retrieve relevant chunks
+        
+        # 2. Search Qdrant for top-k relevant chunks
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_embedding,
+            limit=3
+        )
+
+        if not results:
+            return {"answer": "No relevant documents found. Please train the system first."}
+
+        # 3. Build context from retrieved chunks
+        context = " ".join([hit.payload["text"] for hit in results])
+
+        # 4. Build prompt
+        prompt = f"""Summarize the answer to the question: '{req.query}' In the context you find the details of the work experience (jobs functions), answer the question professionally.
+
+        Context: {context}
+
+        Question: {req.query}
+        Answer:"""
+
+        # 5. Call Hugging Face LLM API for final answer (example: flan-t5-small)
+        #successful
+        hf_generation_url = "https://api-inference.huggingface.co/models/sshleifer/distilbart-cnn-12-6"  #successful
+
+        response = requests.post(
+            hf_generation_url,
+            headers=HF_HEADERS,
+             json={
+                "inputs": prompt,
+                "parameters": {"max_new_tokens": 400, "temperature": 0.6}
+            },
+            timeout=120
+        )
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"summarize failed: {response.text}")
+        data = response.json()
+
+        # Handle summarization vs generation
+        answer = None
+        if isinstance(data, list):
+            if "generated_text" in data[0]:
+                answer = data[0]["generated_text"]
+            elif "summary_text" in data[0]:
+                answer = data[0]["summary_text"]
+        elif isinstance(data, dict):
+            answer = data.get("generated_text") or data.get("summary_text")
+
+        if not answer:
+            raise HTTPException(status_code=500, detail=f"Unexpected HF response: {data}")
+
+        return {"answer": answer.strip(), "context": context}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"summarize failed: {str(e)}")
+
+@app.post("/ask")
+async def ask(req: QueryRequest):
+    """Ask question with RAG"""
+    
+    try:
+        if not client:
+            raise HTTPException(status_code=500, detail="Qdrant client not initialized")
+        # 1. Get query embedding from Hugging Face API
+        query_embedding = get_hf_embedding(req.query)
+        
+        #Option1:Retrieve relevant chunks
+        
+        # 2. Search Qdrant for top-k relevant chunks
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_embedding,
+            limit=3
+        )
+
+        if not results:
+            return {"answer": "No relevant documents found. Please train the system first."}
+
+        # 3. Build context from retrieved chunks
+        context = " ".join([hit.payload["text"] for hit in results])
+
+        # 4. Build prompt
+        prompt = f"""Summarize the answer to the question: '{req.query}' In the context you find the details of the work experience (jobs functions), answer the question professionally.
+
+        Context: {context}
+
+        Question: {req.query}
+        Answer:"""
+
+        # 5. Call Hugging Face LLM API for final answer (example: flan-t5-small)
+        #successful
+        hf_generation_url = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"  #successful
+
+        response = requests.post(
+            hf_generation_url,
+            headers=HF_HEADERS,
+            json={
+                "inputs": prompt,
+                "parameters": {
+                "max_new_tokens": 400,
+                "temperature": 0.7,
+                "top_p": 0.9
+                }
+            },
+            timeout=120
+        )
+        print("HF status code:", response.status_code)
+        print("HF raw response:", response.text)
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Ask failed: {response.text}")
+        data = response.json()
+
+        # Handle summarization vs generation
+        answer = None
+        if isinstance(data, list) and len(data) > 0:
+            # Most generation models return a list with {"generated_text": "..."}
+            answer = data[0].get("generated_text") or data[0].get("summary_text")
+        elif isinstance(data, dict):
+            # Sometimes errors or different structures come as dict
+            if "generated_text" in data:
+                answer = data["generated_text"]
+            elif "summary_text" in data:
+                answer = data["summary_text"]
+            elif "error" in data:
+                raise HTTPException(status_code=500, detail=f"HuggingFace API error: {data['error']}")
+
+        if not answer:
+            raise HTTPException(status_code=500, detail=f"Unexpected HF response: {data}")
+
+        return {"answer": answer.strip(), "context": context}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ask failed: {str(e)}")
-
+    
 @app.get("/status")
 def get_status():
     """Get database status"""

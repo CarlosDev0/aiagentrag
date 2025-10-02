@@ -27,4 +27,4 @@ pip install --prefer-binary -r requirements.txt
 Write-Host "Virtual environment is ready. You are now inside .venv."
 Write-Host "Starting FastAPI server..."
 Write-Host "You can run your Python commands here, e.g.: uvicorn main:app --host 0.0.0.0 --port 8000"
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
