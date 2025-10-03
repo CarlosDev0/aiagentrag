@@ -1,5 +1,5 @@
 # from langchain.llms import HuggingFacePipeline
-from transformers import pipeline, AutoTokenizer
+from transformers import pipeline
 import re
 #from sentence_transformers import SentenceTransformer
 #import chromadb
@@ -76,7 +76,7 @@ llm_pipeline = None
 llm_lock = asyncio.Lock()
 HGClient = InferenceClient(api_key=HUGGING_FACE_TOKEN)
 summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
-tokenizer = AutoTokenizer.from_pretrained("sshleifer/distilbart-cnn-12-6")
+#tokenizer = AutoTokenizer.from_pretrained("sshleifer/distilbart-cnn-12-6")
 #QDRANT: Is an online vector database
 
 # Initialize Qdrant client
@@ -184,18 +184,20 @@ def retrieve_relevant_chunks(question: str, top_k=5):
     sorted_hits = sorted(unique.items(), key=lambda x: x[1], reverse=True)
     return [text for text, score in sorted_hits[:top_k]]
 
-def summarize_chunks(question, chunks, max_chunk_tokens=800):
+def summarize_chunks(question, chunks, max_tokens=1024):
     try:
-        context = " ".join(chunks)
+        
         # Truncate context if it is too long for the model
         # Tokenize and truncate properly
-        inputs = tokenizer(
-            context,
-            max_length=max_chunk_tokens,
-            truncation=True,
-            return_tensors="pt"
-        )
-        text = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
+        # Truncate by characters (safer for token limits)
+        for chunk in chunks:
+            # Skip or truncate if chunk is too long
+            words = chunk.split()
+            if len(words) > max_tokens:
+                chunk = " ".join(words[:max_tokens])
+        context = " ".join(chunks)
+        # Build input text for summarizer
+        text = f"Context:\n{context}\n\nSummarize the relevant experience concisely."
 
         #prompt = f"Answer this question based on the context.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
 
