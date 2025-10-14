@@ -11,6 +11,7 @@ from pypdf import PdfReader
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from huggingface_hub import login
 from typing import List, Dict
 import threading
 import asyncio
@@ -22,7 +23,10 @@ load_dotenv()  # reads .env file
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "document_collection"
+HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
 
+if HUGGING_FACE_TOKEN:
+    login(token=HUGGING_FACE_TOKEN)
 #api_key = os.getenv("OPENAI_API_KEY")
 
 #if not api_key:
@@ -198,13 +202,20 @@ def reset_collection():
         return False
     
 
-async def get_llm_pipeline():
+async def get_ask_llm_pipeline():
     global llm_pipeline
     async with llm_lock:
         if llm_pipeline is None:
-            llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-small")
+            llm_pipeline = pipeline("text2text-generation", model="google/gemma-2-2b-it")
     return llm_pipeline
 
+async def get_gene_llm_pipeline():
+    global llm_pipeline
+    async with llm_lock:
+        if llm_pipeline is None:
+            llm_pipeline = pipeline("text-generation", model="google/gemma-2-2b-it")
+            #llm_pipeline = pipeline("text2text-generation", model="google/gemma-2-2b-it")
+    return llm_pipeline
 # def query_collection(query_text: str, top_k: int = 5):
 #     query_vector = embedding_function(query_text)
 #     results = client.search(
@@ -410,6 +421,7 @@ async def ask(req: QueryRequest):
         #)
         # Get relevant documents
         query_embedding = embedding_model.encode(req.query).tolist()
+        #print(f"query_embedding: '{query_embedding}' ")
         results = client.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_embedding,
@@ -420,15 +432,13 @@ async def ask(req: QueryRequest):
             return {"answer": "No relevant documents found. Please train the system first."}
         
         # Create context
-        # context = " ".join([result.payload["text"] for result in results])
         clean_texts = [
             " ".join(result.payload["text"].split())  # collapses all whitespace to single spaces
             for result in results
         ]
         context = " ".join(clean_texts)
-        #prompt = f"""Based on the following context, answer the question concisely and professionally:
-        prompt = f""" You are a helpful assistant trained to answer questions about my experience that appears in the context.
-        Please provide a detailed, professional, and comprehensive paragraph summarizing the following context.
+        prompt = f""" I am a Software Engineer with more than 6 years of experience. You are a helpful AI assistant trained to answer questions about my knowlege and experience whose details appears in the context.
+        Provide a long, answer (3-5 sentences minimum). Use formal language and summarize relevant work experience and technical skills.
         Context: {context}
 
         Question: {req.query}
@@ -436,11 +446,11 @@ async def ask(req: QueryRequest):
         """
         
         # Get LLM response
-        hf_pipeline = await get_llm_pipeline()
+        hf_pipeline = await get_ask_llm_pipeline()
         #llm = HuggingFacePipeline(pipeline=hf_pipeline)
         llm = HuggingFacePipeline(pipeline=hf_pipeline, pipeline_kwargs={"max_new_tokens": 900,
         "temperature": 0.9,
-        "min_new_tokens": 1200,
+        "min_new_tokens": 200,
         "num_beams": 9,
         "do_sample": True,
         "top_p": 0.9})
@@ -449,6 +459,84 @@ async def ask(req: QueryRequest):
         loop = asyncio.get_running_loop()
         answer = await loop.run_in_executor(None, llm.invoke, prompt)
         
+        return {"answer": answer}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generation")
+async def ask(req: QueryRequest):
+    """This uses a text-generation with RAG"""
+    #In the future I will add the result of /ask into the context of this generation
+    
+    try:
+        if not client:
+            raise HTTPException(status_code=500, detail="Services not initialized")
+        
+        #Option1:Retrieve relevant chunks
+        #answer = chain.run(question=req.query)  #Works fine. Retrieve chuncks
+        #return {"answer": answer}
+        
+        #Option2: 
+        #2.1 Retrieve relevant chunks
+        #results = collection.query(
+        #query_texts=[req.query],
+        #n_results=5
+        #)
+        # Get relevant documents
+        query_embedding = embedding_model.encode(req.query).tolist()
+        #print(f"query_embedding: '{query_embedding}' ")
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_embedding,
+            limit=3
+        )
+        print(f"Results:{results}")
+        if not results:
+            return {"answer": "No relevant documents found. Please train the system first."}
+        
+        # Create context
+        clean_texts = [
+            " ".join(result.payload["text"].split())  # collapses all whitespace to single spaces
+            for result in results
+        ]
+        context = " ".join(clean_texts)
+        prompt = f"""I am a Software Engineer with more than 6 years of experience.
+            You are a helpful AI assistant trained to answer questions about my knowledge and experience whose details appear in the context.
+            Provide a long, detailed answer (3-5 sentences minimum). Use formal language and summarize relevant work experience and technical skills.
+            Context: {context}
+
+            Question: {req.query}
+            Answer professionally:
+            """
+        
+        # Get LLM response
+        hf_pipeline = await get_gene_llm_pipeline()
+        #llm = HuggingFacePipeline(pipeline=hf_pipeline)
+        llm = HuggingFacePipeline(pipeline=hf_pipeline, pipeline_kwargs={"max_new_tokens": 900,
+        "temperature": 0.9,
+        "min_new_tokens": 200,
+        "num_beams": 9,
+        "do_sample": True,
+        "top_p": 0.9})
+        
+        #answer = llm.invoke(prompt)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: hf_pipeline(
+                prompt,
+                max_new_tokens=500,
+                temperature=0.7,
+                do_sample=True,
+                top_p=0.9
+            )
+        )
+
+        generated_text = result[0]["generated_text"]
+
+        # Extract only the text after "Answer professionally:"
+        answer = generated_text.split("Answer professionally:")[-1].strip()
+
         return {"answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
