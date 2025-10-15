@@ -202,12 +202,12 @@ def reset_collection():
         return False
     
 
-async def get_ask_llm_pipeline():
-    global llm_pipeline
-    async with llm_lock:
-        if llm_pipeline is None:
-            llm_pipeline = pipeline("text2text-generation", model="google/gemma-2-2b-it")
-    return llm_pipeline
+# async def get_ask_llm_pipeline():
+#     global llm_pipeline
+#     async with llm_lock:
+#         if llm_pipeline is None:
+#             llm_pipeline = pipeline("text2text-generation", model="google/gemma-2-2b-it")
+#     return llm_pipeline
 
 async def get_gene_llm_pipeline():
     global llm_pipeline
@@ -446,7 +446,7 @@ async def ask(req: QueryRequest):
         """
         
         # Get LLM response
-        hf_pipeline = await get_ask_llm_pipeline()
+        hf_pipeline = await get_gene_llm_pipeline()
         #llm = HuggingFacePipeline(pipeline=hf_pipeline)
         llm = HuggingFacePipeline(pipeline=hf_pipeline, pipeline_kwargs={"max_new_tokens": 900,
         "temperature": 0.9,
