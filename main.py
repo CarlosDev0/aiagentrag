@@ -218,6 +218,7 @@ def reset_collection():
 
 def get_gene_llm_pipeline():
     global llm_pipeline
+    global tokenizer
     with llm_lock:
         if llm_pipeline is None:
             try:
