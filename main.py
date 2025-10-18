@@ -54,6 +54,7 @@ embedding_model = None
 llm_pipeline = None  # Global
 llm_lock = threading.Lock() #asyncio.Lock()
 collection = None
+tokenizer = None
 
 # Initialize Qdrant client
 print (f"URL: {QDRANT_URL}")
@@ -596,9 +597,9 @@ async def ask(req: QueryRequest):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: hf_pipeline(
+            lambda: llm_pipeline(
                 prompt,
-                max_new_tokens=200,
+                max_new_tokens=50,
                 temperature=0.7,
                 do_sample=True,
                 top_p=0.9,
@@ -642,4 +643,3 @@ def get_status():
 @app.get("/")
 def read_root():
     return {"msg": "RAG Application Active", "status": "OK"}
-
