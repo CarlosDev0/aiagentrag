@@ -222,7 +222,8 @@ def get_gene_llm_pipeline():
     with llm_lock:
         if llm_pipeline is None:
             try:
-                print("🔄 Loading Gemma-2-2B (4-bit quantized)...")
+                MODEL_ID = "google/gemma-2-2b-it"
+                print(f"🔄 Loading {MODEL_ID} (4-bit quantized)...")
 
                 # ✅ FIXED: Proper quantization setup
                 bnb_config = BitsAndBytesConfig(
@@ -235,14 +236,14 @@ def get_gene_llm_pipeline():
                 # Load model FIRST with quantization
                 from transformers import AutoTokenizer, AutoModelForCausalLM
                 model = AutoModelForCausalLM.from_pretrained(
-                    "google/gemma-2-2b-it",
+                    MODEL_ID,
                     quantization_config=bnb_config,
                     device_map="auto",
                     torch_dtype=torch.bfloat16,
                     trust_remote_code=True
                 )
 
-                tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L12-v2")
+                tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
                 # NOW create pipeline with loaded model/tokenizer
                 llm_pipeline = pipeline(
