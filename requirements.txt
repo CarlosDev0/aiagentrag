@@ -2,7 +2,7 @@ pip>=24.0
 setuptools>=69.0.0
 wheel>=0.43.0
 numpy>=2.0.0               #numpy<2.0
-starlette<0.41.0
+starlette<=0.46.2
 fastapi==0.115.2
 uvicorn[standard]>=0.30.0
 gunicorn>=22.0.0

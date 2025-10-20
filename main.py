@@ -242,7 +242,7 @@ def get_gene_llm_pipeline():
                     trust_remote_code=True
                 )
 
-                tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+                tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L12-v2")
 
                 # NOW create pipeline with loaded model/tokenizer
                 llm_pipeline = pipeline(
