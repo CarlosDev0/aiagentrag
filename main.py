@@ -222,7 +222,7 @@ def get_gene_llm_pipeline():
     with llm_lock:
         if llm_pipeline is None:
             try:
-                MODEL_ID = "google/gemma-2-2b-it"
+                MODEL_ID = "sentence-transformers/all-MiniLM-L12-v2"
                 print(f"🔄 Loading {MODEL_ID} (4-bit quantized)...")
 
                 # ✅ FIXED: Proper quantization setup
