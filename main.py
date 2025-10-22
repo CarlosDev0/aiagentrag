@@ -26,6 +26,8 @@ QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "document_collection"
 HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
+MODEL_ID = "google/gemma-2-2b-it"
+local_model_path = os.environ.get("GEMMA_MODEL_PATH", "google/gemma-2-2b-it")
 
 if HUGGING_FACE_TOKEN:
     login(token=HUGGING_FACE_TOKEN)
@@ -230,7 +232,6 @@ def get_gene_llm_pipeline():
     with llm_lock:
         if llm_pipeline is None:
             try:
-                MODEL_ID = "google/gemma-2-2b-it"
                 print(f"🔄 Loading {MODEL_ID} (4-bit quantized)...")
 
                 # ✅ FIXED: Proper quantization setup
@@ -244,14 +245,15 @@ def get_gene_llm_pipeline():
                 # Load model FIRST with quantization
                 from transformers import AutoTokenizer, AutoModelForCausalLM
                 model = AutoModelForCausalLM.from_pretrained(
-                    MODEL_ID,
+                    local_model_path,
                     quantization_config=bnb_config,
                     device_map="auto",
                     torch_dtype=torch.bfloat16,
-                    trust_remote_code=True
+                    trust_remote_code=True,
+                    local_files_only=True
                 )
 
-                tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+                tokenizer = AutoTokenizer.from_pretrained(local_model_path, local_files_only=True)
 
                 # NOW create pipeline with loaded model/tokenizer
                 llm_pipeline = pipeline(
