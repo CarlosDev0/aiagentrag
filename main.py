@@ -12,6 +12,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from huggingface_hub import login
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
 import torch
 import threading
@@ -39,6 +40,13 @@ if HUGGING_FACE_TOKEN:
 # --- 1. Application Initialization ---
 
 app = FastAPI(title="RAG Application", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or restrict to your frontend origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # Inicializa ChromaDB en modo de cliente (en memoria por defecto)
 # ¡Nota!: Los datos se perderán cada vez que reinicies la aplicación.
 
