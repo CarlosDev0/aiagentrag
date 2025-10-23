@@ -1,4 +1,4 @@
-# Use official Python 3.10 slim
+# Use official Python 3.12 slim
 FROM python:3.12-slim as builder
 
 ARG HUGGING_FACE_TOKEN
@@ -12,7 +12,7 @@ COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
 ENV MODEL_DIR=/app/models/gemma-2-2b-it
-
+ENV EMBEDDING_MODEL_DIR=/app/models/all-MiniLM-L6-v2
 # Install git and use huggingface_hub to download the model.
 #pip install huggingface_hub && \
 RUN mkdir -p ${MODEL_DIR} && \
@@ -24,8 +24,14 @@ RUN mkdir -p ${MODEL_DIR} && \
                                  local_dir_use_symlinks=False, \
                                  token='$HUGGINGFACE_TOKEN')\" \
     "
+RUN mkdir -p ${EMBEDDING_MODEL_DIR} && \
+    python -c "from huggingface_hub import snapshot_download; \
+               snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', \
+                                 local_dir='${EMBEDDING_MODEL_DIR}', \
+                                 local_dir_use_symlinks=False, \
+                                 token='$HUGGINGFACE_TOKEN')"
 
-FROM python:3.12-slim
+                                 FROM python:3.12-slim
 
 WORKDIR /app
 COPY --from=builder /root/.local /root/.local

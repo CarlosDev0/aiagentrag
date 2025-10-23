@@ -31,6 +31,9 @@ local_model_path = os.environ.get("GEMMA_MODEL_PATH", "google/gemma-2-2b-it")
 
 if HUGGING_FACE_TOKEN:
     login(token=HUGGING_FACE_TOKEN)
+else:
+    print("⚠️ No Hugging Face token found in environment.")
+
 #api_key = os.getenv("OPENAI_API_KEY")
 
 #if not api_key:
@@ -79,7 +82,7 @@ print (f"KEY: {QDRANT_API_KEY}")
 # 'all-MiniLM-L6-v2' es un modelo pequeño y muy eficiente.
 
 
-model_name = "sentence-transformers/all-MiniLM-L6-v2"
+#model_name = "sentence-transformers/all-MiniLM-L6-v2"
 #embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
 
 # --- 2. Helper Functions ---
@@ -101,8 +104,9 @@ def initialize_embedding_model():
     """Initialize embedding model safely"""
     global embedding_model
     try:
-        embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-        print("Embedding model initialized successfully")
+        local_embed_path = os.environ.get("EMBEDDING_MODEL_DIR", "/app/models/all-MiniLM-L6-v2")
+        embedding_model = SentenceTransformer(local_embed_path)
+        print("Embedding model initialized successfully from {local_embed_path}")
         return True
     except Exception as e:
         print(f"Failed to initialize embedding model: {e}")
