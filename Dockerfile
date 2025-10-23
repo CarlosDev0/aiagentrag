@@ -2,7 +2,7 @@
 FROM python:3.12-slim as builder
 
 ARG HUGGING_FACE_TOKEN
-ENV HUGGINGFACE_TOKEN=${HUGGING_FACE_TOKEN}
+ENV HUGGING_FACE_TOKEN=${HUGGING_FACE_TOKEN}
 # Set workdir
 WORKDIR /app
 
@@ -22,14 +22,14 @@ RUN mkdir -p ${MODEL_DIR} && \
                snapshot_download(repo_id='google/gemma-2-2b-it', \
                                  local_dir='${MODEL_DIR}', \
                                  local_dir_use_symlinks=False, \
-                                 token='$HUGGINGFACE_TOKEN')\" \
+                                 token='$HUGGING_FACE_TOKEN')\" \
     "
 RUN mkdir -p ${EMBEDDING_MODEL_DIR} && \
     python -c "from huggingface_hub import snapshot_download; \
                snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', \
                                  local_dir='${EMBEDDING_MODEL_DIR}', \
                                  local_dir_use_symlinks=False, \
-                                 token='$HUGGINGFACE_TOKEN')"
+                                 token='$HUGGING_FACE_TOKEN')"
 
                                  FROM python:3.12-slim
 
