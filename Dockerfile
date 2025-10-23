@@ -1,6 +1,8 @@
 # Use official Python 3.10 slim
 FROM python:3.12-slim as builder
 
+ARG HUGGING_FACE_TOKEN
+ENV HUGGINGFACE_TOKEN=${HUGGING_FACE_TOKEN}
 # Set workdir
 WORKDIR /app
 
@@ -12,12 +14,17 @@ RUN pip install --user --no-cache-dir -r requirements.txt
 ENV MODEL_DIR=/app/models/gemma-2-2b-it
 
 # Install git and use huggingface_hub to download the model.
+#pip install huggingface_hub && \
 RUN mkdir -p ${MODEL_DIR} && \
-    pip install huggingface_hub && \
-    python -c "from huggingface_hub import snapshot_download; \
+    /bin/bash -c " \
+    # 4a. Explicitly log in using the ENV variable.
+    /root/.local/bin/huggingface-cli login --token $HUGGINGFACE_TOKEN && \
+    # 4b. Download the model using the authenticated session.
+    python -c \"from huggingface_hub import snapshot_download; \
                snapshot_download(repo_id='google/gemma-2-2b-it', \
                                  local_dir='${MODEL_DIR}', \
-                                 local_dir_use_symlinks=False)"
+                                 local_dir_use_symlinks=False)\" \
+    "
 
 FROM python:3.12-slim
 
