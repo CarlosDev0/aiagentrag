@@ -18,7 +18,7 @@ ENV MODEL_DIR=/app/models/gemma-2-2b-it
 RUN mkdir -p ${MODEL_DIR} && \
     /bin/bash -c " \
     # 4a. Explicitly log in using the ENV variable.
-    /root/.local/bin/huggingface-cli login --token $HUGGINGFACE_TOKEN && \
+    /root/.local/bin/huggingface-cli login --token \"$HUGGINGFACE_TOKEN\" && \
     # 4b. Download the model using the authenticated session.
     python -c \"from huggingface_hub import snapshot_download; \
                snapshot_download(repo_id='google/gemma-2-2b-it', \
