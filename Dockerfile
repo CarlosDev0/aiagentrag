@@ -30,12 +30,14 @@ RUN mkdir -p ${EMBEDDING_MODEL_DIR} && \
                                  local_dir_use_symlinks=False, \
                                  token='$HUGGING_FACE_TOKEN')"
 
+RUN echo "✅ Listing downloaded models:" && ls -R /app/models
+
 FROM python:3.12-slim
 
 WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 # Copy the pre-downloaded model from the builder stage
-COPY --from=builder /app/models /app/models
+COPY --from=builder /app/models/ /app/models/
 COPY . .
 
 ENV PATH=/root/.local/bin:$PATH

@@ -312,7 +312,12 @@ class SearchRequest(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     print("Starting RAG application...")
-
+    
+    print(f"🔍 Checking embedding model path: {os.environ.get('EMBEDDING_MODEL_PATH')}")
+    if not os.path.exists(os.environ.get("EMBEDDING_MODEL_PATH", "")):
+        print("⚠️ Embedding model directory missing!")
+        os.system("ls -R /app || true")  # print directory contents for debugging
+    
     # Existing inits...
     if not initialize_qdrant_client():
         raise RuntimeError("Qdrant init failed")
