@@ -345,90 +345,90 @@ async def startup_event():
 
     print("RAG application startup completed")
 
-# @app.post("/train")
-# async def train_with_document(file: UploadFile = File(...)):
-#     """
-#     Endpoint to train the model with a PDF file.
-#     - Upload PDF file
-#     - Split PDF text into chunks
-#     - Convert chunks to vector embeddings
-#     - Save embeddings to vector database
-#     """
-#     global collection
-#     if file.content_type != "application/pdf":
-#         raise HTTPException(
-#             status_code=400,
-#             detail="El archivo debe ser un PDF."
-#         )
-#     if not client:
-#         raise HTTPException(status_code=500, detail="Qdrant client not initialized")
+@app.post("/train")
+async def train_with_document(file: UploadFile = File(...)):
+    """
+    Endpoint to train the model with a PDF file.
+    - Upload PDF file
+    - Split PDF text into chunks
+    - Convert chunks to vector embeddings
+    - Save embeddings to vector database
+    """
+    global collection
+    if file.content_type != "application/pdf":
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo debe ser un PDF."
+        )
+    if not client:
+        raise HTTPException(status_code=500, detail="Qdrant client not initialized")
 
-#     if not embedding_model:
-#         raise HTTPException(status_code=500, detail="Embedding model not initialized")
+    if not embedding_model:
+        raise HTTPException(status_code=500, detail="Embedding model not initialized")
 
-#     try:
-#         # Reset collection for new training
-#         reset_collection()
-#         # 1. Read PDF
-#         document_text = read_pdf(file)
-#         if not document_text:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail="Could not extract text from PDF."
-#             )
+    try:
+        # Reset collection for new training
+        reset_collection()
+        # 1. Read PDF
+        document_text = read_pdf(file)
+        if not document_text:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract text from PDF."
+            )
 
-#         # 2. Split text into chunks
-#         chunks = split_text_into_chunks(document_text)
-#         if not chunks:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail="No text chunks generated from PDF."
-#             )
-#         # 3. Prepare data for ChromaDB
-#         #documents = chunks
-#         #metadatas = [{"source": file.filename} for _ in chunks]
-#         #ids = [f"id{i}" for i in range(len(chunks))]
+        # 2. Split text into chunks
+        chunks = split_text_into_chunks(document_text)
+        if not chunks:
+            raise HTTPException(
+                status_code=400,
+                detail="No text chunks generated from PDF."
+            )
+        # 3. Prepare data for ChromaDB
+        #documents = chunks
+        #metadatas = [{"source": file.filename} for _ in chunks]
+        #ids = [f"id{i}" for i in range(len(chunks))]
 
-#         # 4. Add embeddings to database in batches (to avoid memory issues)
-#         # missing work here:
-#         # collection.add(
-#         #     documents=documents,
-#         #     metadatas=metadatas,
-#         #     ids=ids
-#         # )
-#         # Create embeddings and upsert
-#         points = []
-#         for i, chunk in enumerate(chunks):
-#             try:
-#                 embedding = embedding_model.encode(chunk).tolist()
-#                 point = PointStruct(
-#                     id=i,
-#                     vector=embedding,
-#                     payload={"text": chunk, "source": file.filename}
-#                 )
-#                 points.append(point)
-#             except Exception as e:
-#                 print(f"Error processing chunk {i}: {e}")
-#                 continue
+        # 4. Add embeddings to database in batches (to avoid memory issues)
+        # missing work here:
+        # collection.add(
+        #     documents=documents,
+        #     metadatas=metadatas,
+        #     ids=ids
+        # )
+        # Create embeddings and upsert
+        points = []
+        for i, chunk in enumerate(chunks):
+            try:
+                embedding = embedding_model.encode(chunk).tolist()
+                point = PointStruct(
+                    id=i,
+                    vector=embedding,
+                    payload={"text": chunk, "source": file.filename}
+                )
+                points.append(point)
+            except Exception as e:
+                print(f"Error processing chunk {i}: {e}")
+                continue
 
-#         if points:
-#             client.upsert(collection_name=COLLECTION_NAME, points=points)
+        if points:
+            client.upsert(collection_name=COLLECTION_NAME, points=points)
 
-#         count = get_collection_count()
-#         print(f"Collection now has {count} documents")
+        count = get_collection_count()
+        print(f"Collection now has {count} documents")
 
-#         return {
-#             "message": "Document processed and trained successfully.",
-#             "chunks_count": len(chunks),
-#             "total_documents_in_db": count
-#         }
+        return {
+            "message": "Document processed and trained successfully.",
+            "chunks_count": len(chunks),
+            "total_documents_in_db": count
+        }
 
-#     except Exception as e:
-#         print(f"Training error: {e}")
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"Training failed: {str(e)}"
-#         )
+    except Exception as e:
+        print(f"Training error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Training failed: {str(e)}"
+        )
 
 @app.post("/search")
 async def search_in_document(query: Dict[str, str]):
